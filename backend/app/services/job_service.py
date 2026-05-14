@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,10 +13,18 @@ from uuid import uuid4
 
 class JobService:
     def __init__(self, base_dir: str | None = None) -> None:
-        self.base_dir = Path(base_dir or os.getenv("AI_LIGHT_JOB_DIR", "backend/data/jobs"))
+        self.base_dir = Path(base_dir or self._default_base_dir())
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.postgres_dsn = os.getenv("AI_LIGHT_POSTGRES_DSN", "")
         self._lock = Lock()
+
+    def _default_base_dir(self) -> str:
+        configured_dir = os.getenv("AI_LIGHT_JOB_DIR")
+        if configured_dir:
+            return configured_dir
+        if os.getenv("VERCEL"):
+            return str(Path(tempfile.gettempdir()) / "ai-light-jobs")
+        return "backend/data/jobs"
 
     def create(self, kind: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         job = {
