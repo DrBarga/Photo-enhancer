@@ -91,3 +91,52 @@ Generated artifacts:
 - `backend/data/training/manifest.jsonl` - labels for classifier training
 - `backend/models/problem_classifier_report.json` - classifier validation report
 - `backend/data/history` - saved processing history
+
+## Production storage, history and jobs
+
+The backend now runs with safe local fallbacks, but can be switched to production services with environment variables.
+
+Storage providers:
+
+```powershell
+# Local default
+$env:AI_LIGHT_STORAGE_PROVIDER="local"
+
+# Supabase Storage
+$env:AI_LIGHT_STORAGE_PROVIDER="supabase"
+$env:SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
+$env:SUPABASE_SERVICE_ROLE_KEY="..."
+$env:SUPABASE_STORAGE_BUCKET="photo-enhancer"
+
+# S3 or Cloudflare R2
+$env:AI_LIGHT_STORAGE_PROVIDER="r2"
+$env:AI_LIGHT_S3_BUCKET="photo-enhancer"
+$env:AI_LIGHT_S3_ENDPOINT_URL="https://ACCOUNT_ID.r2.cloudflarestorage.com"
+$env:AI_LIGHT_S3_ACCESS_KEY_ID="..."
+$env:AI_LIGHT_S3_SECRET_ACCESS_KEY="..."
+$env:AI_LIGHT_S3_PUBLIC_BASE_URL="https://cdn.example.com"
+```
+
+Postgres/Supabase history and job state:
+
+```powershell
+$env:AI_LIGHT_POSTGRES_DSN="postgresql://USER:PASSWORD@HOST:5432/postgres"
+```
+
+Create the tables from `backend/sql/001_history_jobs.sql`. When this DSN is present, history and job progress are saved in Postgres instead of local JSON files.
+
+Local job fallback:
+
+```powershell
+$env:AI_LIGHT_JOB_DIR="backend/data/jobs"
+```
+
+For heavy processing, deploy the backend on a persistent worker host such as Render, Railway, Fly, Modal, RunPod or Hugging Face Spaces. Vercel is fine for the frontend, but serverless functions are not ideal for SAM/Depth/CLIP/upscaling workloads.
+
+## Auto Enhance API
+
+- `POST /api/auto_enhance` - synchronous auto plan + enhancement.
+- `POST /api/jobs/auto_enhance` - creates a background job.
+- `GET /api/jobs/{job_id}` - polls job progress and result.
+
+Auto Enhance combines global corrections (white balance, CLAHE contrast, exposure, denoise, sharpen, dehaze, JPEG cleanup) with local gradient/reflection/shadow processors and semantic protection for faces/text.

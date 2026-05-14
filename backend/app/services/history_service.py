@@ -11,6 +11,8 @@ from uuid import uuid4
 import cv2
 import numpy as np
 
+from app.services.postgres_history import PostgresHistoryRepository
+from app.services.storage_service import StorageService, create_storage_service
 from app.utils.image_io import encode_png_data_url
 
 
@@ -19,6 +21,10 @@ class HistoryService:
         self.base_dir = Path(base_dir or self._default_base_dir())
         self.index_path = self.base_dir / "index.jsonl"
         self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.storage: StorageService = create_storage_service(str(self.base_dir))
+        self.postgres: PostgresHistoryRepository | None = None
+        if os.getenv("AI_LIGHT_POSTGRES_DSN"):
+            self.postgres = PostgresHistoryRepository()
 
     def _default_base_dir(self) -> str:
         configured_dir = os.getenv("AI_LIGHT_HISTORY_DIR")
@@ -47,11 +53,13 @@ class HistoryService:
         record_dir = self.base_dir / record_id
         record_dir.mkdir(parents=True, exist_ok=True)
 
-        self._write_image(record_dir / "input.png", input_rgb)
-        self._write_image(record_dir / "result.png", result_rgb)
-        self._write_image(record_dir / "heatmap_before.png", heatmap_before_rgb)
-        self._write_image(record_dir / "heatmap_after.png", heatmap_after_rgb)
-        self._write_image(record_dir / "heatmap_delta.png", heatmap_delta_rgb)
+        stored_images = {
+            "input": self.storage.put_png(f"{record_id}/input.png", input_rgb),
+            "result": self.storage.put_png(f"{record_id}/result.png", result_rgb),
+            "heatmap_before": self.storage.put_png(f"{record_id}/heatmap_before.png", heatmap_before_rgb),
+            "heatmap_after": self.storage.put_png(f"{record_id}/heatmap_after.png", heatmap_after_rgb),
+            "heatmap_delta": self.storage.put_png(f"{record_id}/heatmap_delta.png", heatmap_delta_rgb),
+        }
 
         summary = {
             "id": record_id,
@@ -64,6 +72,7 @@ class HistoryService:
             "strength": ml_understanding.get("strength"),
             "problem_level": analysis_summary.get("problem_level"),
             "result_thumb": encode_png_data_url(self._thumbnail(result_rgb)),
+            "result_url": stored_images["result"].public_url,
         }
         full_record = {
             **summary,
@@ -71,19 +80,22 @@ class HistoryService:
             "analysis_summary": analysis_summary,
             "ml_understanding": ml_understanding,
             "images": {
-                "input": "input.png",
-                "result": "result.png",
-                "heatmap_before": "heatmap_before.png",
-                "heatmap_after": "heatmap_after.png",
-                "heatmap_delta": "heatmap_delta.png",
+                key: value.key for key, value in stored_images.items()
+            },
+            "image_urls": {
+                key: value.public_url for key, value in stored_images.items() if value.public_url
             },
         }
         (record_dir / "record.json").write_text(json.dumps(full_record, ensure_ascii=False, indent=2), encoding="utf-8")
         with self.index_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(summary, ensure_ascii=False) + "\n")
+        if self.postgres is not None:
+            self.postgres.save(full_record)
         return summary
 
     def list(self, limit: int = 20) -> list[dict[str, Any]]:
+        if self.postgres is not None:
+            return self.postgres.list(limit)
         if not self.index_path.exists():
             return []
         rows = []
@@ -96,17 +108,30 @@ class HistoryService:
         return rows[: max(1, min(limit, 100))]
 
     def get(self, record_id: str) -> dict[str, Any] | None:
+        if self.postgres is not None:
+            record = self.postgres.get(record_id)
+            if record is None:
+                return None
+            return self._attach_image_data(record, record_id)
+
         record_dir = self.base_dir / record_id
         record_path = record_dir / "record.json"
         if not record_path.exists():
             return None
         record = json.loads(record_path.read_text(encoding="utf-8"))
+        return self._attach_image_data(record, record_id)
+
+    def _attach_image_data(self, record: dict[str, Any], record_id: str) -> dict[str, Any]:
         images = record.get("images", {})
-        record["image_data"] = {
-            key: encode_png_data_url(self._read_image(record_dir / file_name))
-            for key, file_name in images.items()
-            if (record_dir / file_name).exists()
-        }
+        image_data = {}
+        for key, file_name in images.items():
+            if not file_name:
+                continue
+            try:
+                image_data[key] = encode_png_data_url(self._read_stored_image(record_id, file_name))
+            except FileNotFoundError:
+                continue
+        record["image_data"] = image_data
         return record
 
     def compare(self, left_id: str, right_id: str) -> dict[str, Any] | None:
@@ -120,15 +145,11 @@ class HistoryService:
             "score_delta": int(right.get("total_score", 0)) - int(left.get("total_score", 0)),
         }
 
-    def _write_image(self, path: Path, image_rgb: np.ndarray) -> None:
-        image_rgb = np.clip(image_rgb, 0, 255).astype(np.uint8)
-        cv2.imwrite(str(path), cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR))
-
-    def _read_image(self, path: Path) -> np.ndarray:
-        image_bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
-        if image_bgr is None:
-            raise FileNotFoundError(str(path))
-        return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    def _read_stored_image(self, record_id: str, file_name: str) -> np.ndarray:
+        try:
+            return self.storage.read_image(file_name)
+        except FileNotFoundError:
+            return self.storage.read_image(f"{record_id}/{file_name}")
 
     def _thumbnail(self, image_rgb: np.ndarray) -> np.ndarray:
         height, width = image_rgb.shape[:2]

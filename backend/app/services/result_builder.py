@@ -53,6 +53,7 @@ def build_system_comment(
 def build_analysis_summary(before: AnalysisMaps, after: AnalysisMaps) -> dict[str, object]:
     before_severity = before.severity()
     after_severity = after.severity()
+    universal = before.universal or {}
     return {
         "scene_type_before": before.scene_type,
         "scene_type_after": after.scene_type,
@@ -65,6 +66,10 @@ def build_analysis_summary(before: AnalysisMaps, after: AnalysisMaps) -> dict[st
         "ml_depth_before": before.ml_status.get("depth", "cv"),
         "ml_depth_after": after.ml_status.get("depth", "cv"),
         "ml_depth_status": after.ml_status.get("depth_status", "fallback"),
+        "universal_quality": universal.get("quality", {}),
+        "scene_scores": universal.get("scene_scores", {}),
+        "semantic_coverage": universal.get("semantic_coverage", {}),
+        "recommendations": universal.get("recommendations", []),
     }
 
 

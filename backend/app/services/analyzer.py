@@ -3,10 +3,14 @@ import numpy as np
 
 from app.models.schemas import AnalysisMaps
 from app.services.ml_providers import get_ml_services
+from app.services.universal_analyzer import UniversalImageAnalyzer
 from app.utils.map_math import local_mean_std, normalize_map
 
 
 class ImageAnalyzer:
+    def __init__(self) -> None:
+        self.universal_analyzer = UniversalImageAnalyzer()
+
     def analyze(self, image_rgb: np.ndarray) -> AnalysisMaps:
         image_float = image_rgb.astype(np.float32)
         luminance = (
@@ -110,7 +114,7 @@ class ImageAnalyzer:
             reflection_mask,
         )
 
-        return AnalysisMaps(
+        analysis_maps = AnalysisMaps(
             luminance=luminance,
             gradient=gradient_norm,
             contrast=contrast_norm,
@@ -142,6 +146,10 @@ class ImageAnalyzer:
                 "depth_detail": depth_result.detail[:160],
             },
         )
+        universal, semantic_masks = self.universal_analyzer.analyze(image_rgb, analysis_maps)
+        analysis_maps.universal = universal
+        analysis_maps.semantic_masks = semantic_masks
+        return analysis_maps
 
     def _sobel_gradient(self, luminance: np.ndarray) -> np.ndarray:
         gx = cv2.Sobel(luminance, cv2.CV_32F, 1, 0, ksize=3)

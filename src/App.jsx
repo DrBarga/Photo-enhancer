@@ -99,8 +99,12 @@ export default function App() {
   const [smartMaskCoverage, setSmartMaskCoverage] = useState(null);
   const [mlStatus, setMlStatus] = useState(null);
   const [mlUnderstanding, setMlUnderstanding] = useState(null);
+  const [universalAnalysis, setUniversalAnalysis] = useState(null);
+  const [autoPlan, setAutoPlan] = useState(null);
+  const [activeJob, setActiveJob] = useState(null);
   const [historyItems, setHistoryItems] = useState([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [isAutoEnhancing, setIsAutoEnhancing] = useState(false);
 
   const [imageNaturalSize, setImageNaturalSize] = useState({ width: 1, height: 1 });
   const [imageBounds, setImageBounds] = useState({ left: 0, top: 0, width: 100, height: 100 });
@@ -219,6 +223,8 @@ export default function App() {
       setSmartMaskCoverage(data.smart_mask_coverage ?? null);
       setMlStatus(data.ml_status ?? null);
       setMlUnderstanding(data.ml_understanding ?? null);
+      setUniversalAnalysis(data.universal_analysis ?? null);
+      setAutoPlan(null);
       setSystemComment(data.system_comment ?? "Анализ выполнен.");
       setLastAction("Heatmap построена до обработки");
     } catch (error) {
@@ -288,12 +294,84 @@ export default function App() {
     setDepthMapAfter(null);
     setMlStatus(null);
     setMlUnderstanding(null);
+    setUniversalAnalysis(null);
+    setAutoPlan(null);
     await analyzeFile(file);
   };
 
   const handleAnalyzeAgain = async () => {
     const file = await getProcessingFile();
     await analyzeFile(file);
+  };
+
+  const applyEnhancementResult = (data, sourceImage, label = "Обработка завершена") => {
+    setBeforeImage(sourceImage);
+    setAfterImage(data.result_image ?? sourceImage);
+    setHeatmapBefore(data.heatmap_before_image ?? data.heatmap_image);
+    setHeatmapAfter(data.heatmap_after_image ?? null);
+    setHeatmapDelta(data.heatmap_delta_image ?? null);
+    setDepthMapBefore(data.depth_map_before_image ?? null);
+    setDepthMapAfter(data.depth_map_after_image ?? null);
+    setHeatmapView("result");
+    setMetrics(data.metrics ?? emptyMetrics);
+    setTotalScore(data.total_score ?? null);
+    setSystemComment(data.system_comment ?? label);
+    setAnalysisSummary(data.analysis_summary ?? null);
+    setPromptParameters(data.prompt_parameters ?? null);
+    setSmartMaskCoverage(data.smart_mask_coverage ?? null);
+    setMlStatus(data.ml_status ?? null);
+    setMlUnderstanding(data.ml_understanding ?? null);
+    setUniversalAnalysis(data.universal_analysis ?? null);
+    setAutoPlan(data.auto_plan ?? null);
+    if (data.history_item) {
+      setHistoryItems((current) => [data.history_item, ...current.filter((item) => item.id !== data.history_item.id)].slice(0, 12));
+    }
+    setComparePosition(50);
+    setLastAction(label);
+  };
+
+  const pollJob = async (jobId, sourceImage) => {
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`);
+      if (!response.ok) throw new Error("Не удалось получить статус задачи");
+      const job = await response.json();
+      setActiveJob(job);
+      setLastAction(`Auto Enhance: ${job.message || job.status} ${job.progress ?? 0}%`);
+      if (job.status === "done") {
+        applyEnhancementResult(job.result, sourceImage, "Auto Enhance завершен");
+        return;
+      }
+      if (job.status === "failed") {
+        throw new Error(job.error?.message || "Auto Enhance задача завершилась ошибкой");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error("Auto Enhance занимает слишком много времени");
+  };
+
+  const handleAutoEnhance = async () => {
+    try {
+      setIsAutoEnhancing(true);
+      const sourceImage = beforeImage;
+      const processingFile = await getProcessingFile();
+      const formData = new FormData();
+      formData.append("image", processingFile);
+      formData.append("prompt", prompt);
+      setLastAction("Auto Enhance: создание задачи...");
+      const response = await fetch(`${API_BASE_URL}/api/jobs/auto_enhance`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) throw new Error("Не удалось создать Auto Enhance задачу");
+      const job = await response.json();
+      setActiveJob(job);
+      await pollJob(job.id, sourceImage);
+    } catch (error) {
+      setLastAction(error.message || "Auto Enhance не выполнен");
+      setSystemComment(backendUnavailableMessage);
+    } finally {
+      setIsAutoEnhancing(false);
+    }
   };
 
   const handleProcess = async () => {
@@ -324,27 +402,7 @@ export default function App() {
       }
 
       const data = await response.json();
-      setBeforeImage(sourceImage);
-      setAfterImage(data.result_image ?? sourceImage);
-      setHeatmapBefore(data.heatmap_before_image ?? data.heatmap_image);
-      setHeatmapAfter(data.heatmap_after_image ?? null);
-      setHeatmapDelta(data.heatmap_delta_image ?? null);
-      setDepthMapBefore(data.depth_map_before_image ?? null);
-      setDepthMapAfter(data.depth_map_after_image ?? null);
-      setHeatmapView("result");
-      setMetrics(data.metrics ?? emptyMetrics);
-      setTotalScore(data.total_score ?? null);
-      setSystemComment(data.system_comment ?? "Обработка завершена.");
-      setAnalysisSummary(data.analysis_summary ?? null);
-      setPromptParameters(data.prompt_parameters ?? null);
-      setSmartMaskCoverage(data.smart_mask_coverage ?? null);
-      setMlStatus(data.ml_status ?? null);
-      setMlUnderstanding(data.ml_understanding ?? null);
-      if (data.history_item) {
-        setHistoryItems((current) => [data.history_item, ...current.filter((item) => item.id !== data.history_item.id)].slice(0, 12));
-      }
-      setComparePosition(50);
-      setLastAction(`Обработка завершена: ${modeSummary(data.modes ?? selectedModes)}`);
+      applyEnhancementResult(data, sourceImage, `Обработка завершена: ${modeSummary(data.modes ?? selectedModes)}`);
     } catch (error) {
       setLastAction(error.message || "Не удалось обработать изображение");
       setSystemComment(backendUnavailableMessage);
@@ -363,6 +421,7 @@ export default function App() {
     setHeatmapView(heatmapBefore ? "before" : "result");
     setMlStatus(null);
     setMlUnderstanding(null);
+    setAutoPlan(null);
     setSystemComment("Параметры сброшены.");
     setLastAction("Параметры сброшены");
   };
@@ -581,8 +640,11 @@ export default function App() {
                 <div className="grid content-start gap-3 sm:grid-cols-2 xl:grid-cols-1">
                   <SurfaceButton onClick={handleUploadClick}>Загрузить изображение</SurfaceButton>
                   <SurfaceButton onClick={handleAnalyzeAgain} disabled={isAnalyzing}>Анализ / Heatmap</SurfaceButton>
+                  <SurfaceButton onClick={handleAutoEnhance} disabled={isAutoEnhancing || isProcessing || isAnalyzing} className="border-emerald-300/35 bg-emerald-300/10 text-emerald-50">
+                    {isAutoEnhancing ? "Auto Enhance..." : "Улучшить автоматически"}
+                  </SurfaceButton>
                   <SurfaceButton onClick={selectAllModes}>Все режимы</SurfaceButton>
-                  <SurfaceButton onClick={handleProcess} disabled={isProcessing || isAnalyzing}>{isProcessing ? "Обработка..." : "Запустить"}</SurfaceButton>
+                  <SurfaceButton onClick={handleProcess} disabled={isProcessing || isAnalyzing || isAutoEnhancing}>{isProcessing ? "Обработка..." : "Запустить"}</SurfaceButton>
                   <SurfaceButton onClick={handleReset}>Сбросить</SurfaceButton>
                   <SurfaceButton onClick={handleDownload}>Скачать текущий вид</SurfaceButton>
 
@@ -640,6 +702,33 @@ export default function App() {
               {systemComment}
             </div>
 
+            {activeJob && activeJob.status !== "done" && (
+              <div className="mt-4 rounded-lg border border-emerald-300/20 bg-emerald-300/8 p-4 text-sm text-zinc-300">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="text-zinc-100">Очередь обработки</div>
+                  <div className="text-emerald-100">{activeJob.progress ?? 0}%</div>
+                </div>
+                <div className="h-2 rounded-full bg-white/10">
+                  <div className="h-2 rounded-full bg-emerald-300" style={{ width: `${activeJob.progress ?? 0}%` }} />
+                </div>
+                <div className="mt-2 text-xs text-zinc-400">{activeJob.message || activeJob.status}</div>
+              </div>
+            )}
+
+            {autoPlan && (
+              <div className="mt-4 rounded-lg border border-emerald-300/20 bg-black/25 p-4 text-sm text-zinc-300">
+                <div className="mb-3 text-zinc-100">Auto Enhance план</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <span className="text-zinc-500">Режимы</span>
+                  <span>{autoPlan.modes?.join(", ") || "auto"}</span>
+                  <span className="text-zinc-500">Глобально</span>
+                  <span>{autoPlan.global_actions?.join(", ") || "бережно"}</span>
+                  <span className="text-zinc-500">Заметки</span>
+                  <span>{autoPlan.notes?.slice(0, 3).join("; ") || "нет"}</span>
+                </div>
+              </div>
+            )}
+
             {analysisSummary && (
               <div className="mt-4 rounded-lg border border-white/10 bg-black/25 p-4 text-sm text-zinc-300">
                 <div className="mb-3 text-zinc-100">Световая структура</div>
@@ -650,6 +739,33 @@ export default function App() {
                   <span>{analysisSummary.reflection_material_after}</span>
                   <span className="text-zinc-500">Edge density</span>
                   <span>{analysisSummary.edge_density}</span>
+                </div>
+              </div>
+            )}
+
+            {universalAnalysis && (
+              <div className="mt-4 rounded-lg border border-white/10 bg-black/25 p-4 text-sm text-zinc-300">
+                <div className="mb-3 text-zinc-100">Универсальный анализ</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <span className="text-zinc-500">Размер</span>
+                  <span>{universalAnalysis.dimensions?.width}×{universalAnalysis.dimensions?.height}</span>
+                  <span className="text-zinc-500">Blur</span>
+                  <span>{Math.round((universalAnalysis.quality?.blur ?? 0) * 100)}%</span>
+                  <span className="text-zinc-500">Noise</span>
+                  <span>{Math.round((universalAnalysis.quality?.noise ?? 0) * 100)}%</span>
+                  <span className="text-zinc-500">WB shift</span>
+                  <span>{Math.round((universalAnalysis.quality?.white_balance_shift ?? 0) * 100)}%</span>
+                  <span className="text-zinc-500">JPEG</span>
+                  <span>{Math.round((universalAnalysis.quality?.jpeg_artifacts ?? 0) * 100)}%</span>
+                  <span className="text-zinc-500">Сцены</span>
+                  <span>
+                    {Object.entries(universalAnalysis.scene_scores ?? {})
+                      .filter(([, value]) => value > 0.18)
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 4)
+                      .map(([key]) => key)
+                      .join(", ") || "balanced"}
+                  </span>
                 </div>
               </div>
             )}

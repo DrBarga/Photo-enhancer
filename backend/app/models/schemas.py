@@ -73,6 +73,8 @@ class AnalysisMaps:
     scene_type: str
     reflection_material: str
     ml_status: dict[str, Any] = field(default_factory=dict)
+    universal: dict[str, Any] = field(default_factory=dict)
+    semantic_masks: dict[str, np.ndarray] = field(default_factory=dict)
 
     def severity(self) -> dict[str, float]:
         return {

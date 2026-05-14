@@ -2,13 +2,16 @@ import json
 from dataclasses import asdict
 
 import numpy as np
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, status
 
 from app.core.config import settings
 from app.models.schemas import AnalysisMaps, PromptParameters
 from app.services.analyzer import ImageAnalyzer
+from app.services.auto_enhance import AutoEnhancePlanner
 from app.services.correction_engine import CorrectionEngine
+from app.services.global_enhancer import GlobalEnhancer
 from app.services.history_service import HistoryService
+from app.services.job_service import JobService
 from app.services.prompt_interpreter import PromptInterpreter
 from app.services.quality_evaluator import QualityEvaluator
 from app.services.result_builder import build_analysis_summary, build_system_comment
@@ -26,6 +29,9 @@ quality_evaluator = QualityEvaluator()
 smart_mask_builder = SmartMaskBuilder()
 ml_services = get_ml_services()
 history_service = HistoryService()
+auto_planner = AutoEnhancePlanner()
+global_enhancer = GlobalEnhancer()
+job_service = JobService()
 
 
 @router.get("/health")
@@ -84,6 +90,7 @@ async def analyze_image(
         "mode_heatmaps": _mode_heatmaps(image_rgb, analysis),
         "prompt_parameters": prompt_parameters.to_public_dict(),
         "analysis_summary": build_analysis_summary(analysis, analysis),
+        "universal_analysis": analysis.universal,
         "smart_mask_coverage": _mask_coverage(target_masks),
         "ml_status": ml_status,
         "ml_understanding": ml_understanding,
@@ -183,11 +190,165 @@ async def process_image(
         "total_score": total_score,
         "prompt_parameters": prompt_parameters.to_public_dict(),
         "analysis_summary": analysis_summary,
+        "universal_analysis": before_analysis.universal,
         "smart_mask_coverage": _mask_coverage(target_masks),
         "ml_status": ml_status,
         "ml_understanding": ml_understanding,
         "history_item": history_item,
         "system_comment": comment,
+    }
+
+
+@router.post("/auto_enhance")
+async def auto_enhance_image(
+    image: UploadFile = File(...),
+    prompt: str = Form(""),
+) -> dict[str, object]:
+    content = await image.read()
+    validate_upload(image, content)
+    image_rgb = load_image_rgb(content)
+    return _auto_enhance_payload(image_rgb, prompt)
+
+
+@router.post("/jobs/auto_enhance", status_code=status.HTTP_202_ACCEPTED)
+async def create_auto_enhance_job(
+    background_tasks: BackgroundTasks,
+    image: UploadFile = File(...),
+    prompt: str = Form(""),
+) -> dict[str, object]:
+    content = await image.read()
+    validate_upload(image, content)
+    job = job_service.create(
+        "auto_enhance",
+        {
+            "filename": image.filename,
+            "content_type": image.content_type,
+            "prompt": prompt,
+            "size_bytes": len(content),
+        },
+    )
+
+    def work(report):
+        report(12, "loading image")
+        image_rgb = load_image_rgb(content)
+        return _auto_enhance_payload(image_rgb, prompt, report)
+
+    background_tasks.add_task(job_service.run, str(job["id"]), work)
+    return job
+
+
+@router.get("/jobs/{job_id}")
+def get_job(job_id: str) -> dict[str, object]:
+    job = job_service.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    return job
+
+
+def _auto_enhance_payload(
+    image_rgb: np.ndarray,
+    prompt: str,
+    report=None,
+) -> dict[str, object]:
+    if report:
+        report(20, "analyzing image")
+    before_analysis = analyzer.analyze(image_rgb)
+    plan = auto_planner.plan(before_analysis)
+    if prompt.strip():
+        user_prompt = interpreter.parse(prompt)
+        plan.prompt.raw_tokens.extend(user_prompt.raw_tokens)
+        plan.prompt.mode_hints = sorted(set(plan.prompt.mode_hints + user_prompt.mode_hints))
+        if user_prompt.colors:
+            plan.prompt.colors = user_prompt.colors
+            plan.prompt.color_names = user_prompt.color_names
+            plan.prompt.gradient_stops = user_prompt.gradient_stops
+            if "gradient" not in plan.modes:
+                plan.modes.insert(0, "gradient")
+        if user_prompt.reflection_material != "auto":
+            plan.prompt.reflection_material = user_prompt.reflection_material
+        if user_prompt.shadow_generate:
+            plan.prompt.shadow_generate = True
+            if "shadow" not in plan.modes:
+                plan.modes.append("shadow")
+
+    if report:
+        report(36, "running global corrections")
+    prepared_rgb = global_enhancer.apply(image_rgb, before_analysis, plan.global_actions)
+
+    if report:
+        report(52, "running local correction pipeline")
+    result_rgb, _stage_before, after_analysis, applied_modes = engine.process(
+        image_rgb=prepared_rgb,
+        modes=plan.modes,
+        prompt=plan.prompt,
+    )
+    if not applied_modes:
+        applied_modes = plan.modes
+
+    if report:
+        report(76, "building diagnostics")
+    target_masks = _smart_masks(image_rgb, before_analysis, applied_modes, plan.prompt)
+    metrics, total_score = quality_evaluator.evaluate(
+        before_analysis,
+        after_analysis,
+        original_rgb=image_rgb,
+        result_rgb=result_rgb,
+        target_masks=target_masks,
+    )
+    before_map = _focused_problem_map(before_analysis, applied_modes, target_masks)
+    after_map = _focused_problem_map(after_analysis, applied_modes, target_masks)
+    heatmap_before_rgb = render_heatmap_overlay(image_rgb, before_map)
+    heatmap_after_rgb = render_heatmap_overlay(result_rgb, after_map)
+    heatmap_delta_rgb = render_delta_heatmap_overlay(result_rgb, before_map, after_map)
+    depth_before_rgb = render_depth_map(before_analysis.depth)
+    depth_after_rgb = render_depth_map(after_analysis.depth)
+    metric_payload = [metric.to_public_dict() for metric in metrics]
+    analysis_summary = build_analysis_summary(before_analysis, after_analysis)
+    ml_status = _ml_status(image_rgb, before_analysis, after_analysis)
+    ml_understanding = _ml_understanding(image_rgb, prompt, before_analysis, applied_modes)
+    comment = build_system_comment(
+        applied_modes,
+        plan.prompt,
+        before_analysis,
+        after_analysis,
+        metrics,
+    )
+    history_item = history_service.save(
+        input_rgb=image_rgb,
+        result_rgb=result_rgb,
+        heatmap_before_rgb=heatmap_before_rgb,
+        heatmap_after_rgb=heatmap_after_rgb,
+        heatmap_delta_rgb=heatmap_delta_rgb,
+        modes=applied_modes,
+        prompt=prompt or "auto-enhance",
+        metrics=metric_payload,
+        total_score=total_score,
+        analysis_summary=analysis_summary,
+        ml_understanding=ml_understanding,
+    )
+
+    return {
+        "modes": applied_modes,
+        "auto_plan": plan.to_public_dict(),
+        "result_image": encode_png_data_url(result_rgb),
+        "heatmap_image": encode_png_data_url(heatmap_before_rgb),
+        "heatmap_before_image": encode_png_data_url(heatmap_before_rgb),
+        "heatmap_after_image": encode_png_data_url(heatmap_after_rgb),
+        "heatmap_delta_image": encode_png_data_url(heatmap_delta_rgb),
+        "depth_map_before_image": encode_png_data_url(depth_before_rgb),
+        "depth_map_after_image": encode_png_data_url(depth_after_rgb),
+        "mode_heatmaps_before": _mode_heatmaps(image_rgb, before_analysis),
+        "mode_heatmaps_after": _mode_heatmaps(result_rgb, after_analysis),
+        "metrics": metric_payload,
+        "total_score": total_score,
+        "prompt_parameters": plan.prompt.to_public_dict(),
+        "analysis_summary": analysis_summary,
+        "universal_analysis": before_analysis.universal,
+        "smart_mask_coverage": _mask_coverage(target_masks),
+        "ml_status": ml_status,
+        "ml_understanding": ml_understanding,
+        "history_item": history_item,
+        "system_comment": f"Auto Enhance: {comment}",
     }
 
 

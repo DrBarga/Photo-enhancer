@@ -17,6 +17,7 @@ __pycache__
 backend/models
 backend/data/debug
 backend/data/history
+backend/data/jobs
 backend/data/training/images
 backend/data/training/source
 

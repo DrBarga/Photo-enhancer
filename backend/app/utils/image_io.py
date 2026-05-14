@@ -9,6 +9,14 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from app.core.config import settings
 
 
+try:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except Exception:
+    pass
+
+
 def validate_upload(file: UploadFile, content: bytes) -> None:
     if not content:
         raise HTTPException(
@@ -26,7 +34,7 @@ def validate_upload(file: UploadFile, content: bytes) -> None:
     if file.content_type not in settings.allowed_content_types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Поддерживаются JPG, PNG, WEBP и BMP изображения.",
+            detail="Поддерживаются JPG, PNG, WEBP, BMP, HEIC/HEIF и AVIF изображения.",
         )
 
 
