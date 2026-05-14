@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,10 +15,18 @@ from app.utils.image_io import encode_png_data_url
 
 
 class HistoryService:
-    def __init__(self, base_dir: str = "backend/data/history") -> None:
-        self.base_dir = Path(base_dir)
+    def __init__(self, base_dir: str | None = None) -> None:
+        self.base_dir = Path(base_dir or self._default_base_dir())
         self.index_path = self.base_dir / "index.jsonl"
         self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    def _default_base_dir(self) -> str:
+        configured_dir = os.getenv("AI_LIGHT_HISTORY_DIR")
+        if configured_dir:
+            return configured_dir
+        if os.getenv("VERCEL"):
+            return str(Path(tempfile.gettempdir()) / "ai-light-history")
+        return "backend/data/history"
 
     def save(
         self,
