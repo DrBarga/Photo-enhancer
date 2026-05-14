@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import defaultBefore from "./assets/hero.png";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "";
+const backendUnavailableMessage =
+  import.meta.env.PROD
+    ? "Backend API недоступен на деплое. Проверьте Vercel Function logs и endpoint /api/health."
+    : "Проверьте, что backend запущен на 127.0.0.1:8000.";
 
 const processingOptions = [
   { value: "gradient", label: "Градиент" },
@@ -221,7 +225,7 @@ export default function App() {
       setLastAction("Heatmap построена до обработки");
     } catch (error) {
       setLastAction(error.message || "Анализ не выполнен");
-      setSystemComment("Проверьте, что backend запущен на 127.0.0.1:8000.");
+      setSystemComment(backendUnavailableMessage);
     } finally {
       setIsAnalyzing(false);
     }
@@ -345,7 +349,7 @@ export default function App() {
       setLastAction(`Обработка завершена: ${modeSummary(data.modes ?? selectedModes)}`);
     } catch (error) {
       setLastAction(error.message || "Не удалось обработать изображение");
-      setSystemComment("Проверьте, что backend запущен на 127.0.0.1:8000.");
+      setSystemComment(backendUnavailableMessage);
     } finally {
       setIsProcessing(false);
     }

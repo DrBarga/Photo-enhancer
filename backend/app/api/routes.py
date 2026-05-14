@@ -17,7 +17,7 @@ from app.services.smart_masks import SmartMaskBuilder
 from app.utils.heatmap import render_delta_heatmap_overlay, render_depth_map, render_heatmap_overlay
 from app.utils.image_io import encode_png_data_url, load_image_rgb, validate_upload
 
-router = APIRouter(prefix="/api")
+router = APIRouter()
 
 interpreter = PromptInterpreter()
 analyzer = ImageAnalyzer()
