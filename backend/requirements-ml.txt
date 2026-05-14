@@ -1,0 +1,12 @@
+# Optional ML stack. Install only when you want pretrained-model mode.
+# CPU mode works, but it can be slow on large images. CUDA is recommended for product use.
+torch>=2.3.0
+torchvision>=0.18.0
+transformers>=4.45.0
+accelerate>=0.34.0
+diffusers>=0.31.0
+safetensors>=0.4.5
+scikit-learn>=1.5.0
+joblib>=1.4.2
+requests>=2.32.0
+segment-anything>=1.0

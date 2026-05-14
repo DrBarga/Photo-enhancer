@@ -1,0 +1,17 @@
+{
+  "source": "Wikimedia Commons API + synthetic labelled artifacts",
+  "raw_images": 74,
+  "training_examples": 180,
+  "problems": [
+    "gradient",
+    "reflection",
+    "shadow"
+  ],
+  "materials": [
+    "asphalt",
+    "glass",
+    "mirror",
+    "water"
+  ],
+  "target_examples": 180
+}
