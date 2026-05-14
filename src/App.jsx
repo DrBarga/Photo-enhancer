@@ -3,9 +3,7 @@ import defaultBefore from "./assets/hero.png";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "";
 const backendUnavailableMessage =
-  import.meta.env.PROD
-    ? "Backend API недоступен на деплое. Проверьте Vercel Function logs и endpoint /api/health."
-    : "Проверьте, что backend запущен на 127.0.0.1:8000.";
+  "Backend API недоступен. На Vercel проверьте /api/health и Function logs; локально запустите backend на 127.0.0.1:8000.";
 
 const processingOptions = [
   { value: "gradient", label: "Градиент" },
