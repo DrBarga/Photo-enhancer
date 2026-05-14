@@ -5,6 +5,23 @@ const API_BASE_URL = import.meta.env.VITE_API_URL ?? "";
 const backendUnavailableMessage =
   "Backend API недоступен. На Vercel проверьте /api/health и Function logs; локально запустите backend на 127.0.0.1:8000.";
 
+const readableError = (error) => {
+  const message = error?.message || "";
+  if (!message || message === "Failed to fetch" || message === "NetworkError when attempting to fetch resource.") {
+    return backendUnavailableMessage;
+  }
+  return message;
+};
+
+const responseError = async (response, fallback) => {
+  try {
+    const errorData = await response.json();
+    return errorData.detail || fallback;
+  } catch {
+    return response.statusText || fallback;
+  }
+};
+
 const processingOptions = [
   { value: "gradient", label: "Градиент" },
   { value: "reflection", label: "Отражение" },
@@ -210,7 +227,7 @@ export default function App() {
         method: "POST",
         body: await buildFormData(file, false),
       });
-      if (!response.ok) throw new Error("Не удалось выполнить анализ изображения");
+      if (!response.ok) throw new Error(await responseError(response, "Не удалось выполнить анализ изображения"));
       const data = await response.json();
       setHeatmapBefore(data.heatmap_image);
       setDepthMapBefore(data.depth_map_image ?? null);
@@ -229,7 +246,7 @@ export default function App() {
       setLastAction("Heatmap построена до обработки");
     } catch (error) {
       setLastAction(error.message || "Анализ не выполнен");
-      setSystemComment(backendUnavailableMessage);
+      setSystemComment(readableError(error));
     } finally {
       setIsAnalyzing(false);
     }
@@ -333,7 +350,7 @@ export default function App() {
   const pollJob = async (jobId, sourceImage) => {
     for (let attempt = 0; attempt < 180; attempt += 1) {
       const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`);
-      if (!response.ok) throw new Error("Не удалось получить статус задачи");
+      if (!response.ok) throw new Error(await responseError(response, "Не удалось получить статус задачи"));
       const job = await response.json();
       setActiveJob(job);
       setLastAction(`Auto Enhance: ${job.message || job.status} ${job.progress ?? 0}%`);
@@ -362,13 +379,13 @@ export default function App() {
         method: "POST",
         body: formData,
       });
-      if (!response.ok) throw new Error("Не удалось создать Auto Enhance задачу");
+      if (!response.ok) throw new Error(await responseError(response, "Не удалось создать Auto Enhance задачу"));
       const job = await response.json();
       setActiveJob(job);
       await pollJob(job.id, sourceImage);
     } catch (error) {
       setLastAction(error.message || "Auto Enhance не выполнен");
-      setSystemComment(backendUnavailableMessage);
+      setSystemComment(readableError(error));
     } finally {
       setIsAutoEnhancing(false);
     }
@@ -391,21 +408,14 @@ export default function App() {
       });
 
       if (!response.ok) {
-        let detail = "Сервер вернул ошибку обработки.";
-        try {
-          const errorData = await response.json();
-          detail = errorData.detail || detail;
-        } catch {
-          detail = response.statusText || detail;
-        }
-        throw new Error(detail);
+        throw new Error(await responseError(response, "Сервер вернул ошибку обработки."));
       }
 
       const data = await response.json();
       applyEnhancementResult(data, sourceImage, `Обработка завершена: ${modeSummary(data.modes ?? selectedModes)}`);
     } catch (error) {
       setLastAction(error.message || "Не удалось обработать изображение");
-      setSystemComment(backendUnavailableMessage);
+      setSystemComment(readableError(error));
     } finally {
       setIsProcessing(false);
     }
